@@ -1,129 +1,181 @@
-import math
-from config.parser import parser
 from random import randint
-
+import time
+import parameters
+import math
 from shapely.geometry import Polygon, LineString
+from GUI import plot
 
-from utils.plotter import plot
-
-def start(obstacles, path_points, path_validity):
-
-    population = _generate_population(path_points, obstacles, path_validity)
+def start(path_validity):
+    # Define um caminho minimo inicial grande
+    start = time.time()
+    shortest_path = 10**5
+    optimal_solution_time = start
+    lock_count = 0
+    population = create_population(parameters.points, path_validity)
     path_lengths = []
+    new_index = 0
 
     for chromosome in population:
-        path_lengths.append(_calculate_path_length(chromosome, path_points))
+        path_lengths.append(get_path_length(chromosome, parameters.points))
 
-    plot(obstacles, path_points, population, path_lengths, 1, False)
+    plot(start, parameters.obstacles, parameters.points, population, path_lengths, 1, False, optimal_solution_time)
 
-    generations = int(parser['Genetic Algorithm']['max_generations'])
-    
-    for gen in range(generations - 1):
+    for generation in range(parameters.max_generations - 1):
+        if lock_count > 10:
+            if is_valid_chromosome(population[new_index], parameters.obstacles, parameters.points):
+                plot(start, parameters.obstacles, parameters.points, new_population, path_lengths, generation, True, optimal_solution_time)
+                break
+            else:
+                lock_count = 0
+                new_index = 0
+
         new_population = []
         path_lengths.clear()
 
-        fitness_list = _sort_by_fitness(population, path_points)
+        fitness_list = fitness_sort(population, parameters.obstacles, parameters.points)
         
-        for chromosome in population:
-            deadlock_count = 0
+        for i in range(len(population)):
+            chromosome = population[i]
 
-            while True:
-                parent1 = _choose_random_parent(fitness_list)
-                parent2 = _choose_random_parent(fitness_list)
-
-                if deadlock_count > 1000:
-                    child = parent1
-                    break
-
-                child = _crossover(parent1, parent2)
-
-                if randint(1, 10) <= 10 * float(parser['Genetic Algorithm']['mutation_probability']):
-                    child = _mutation(child)
-
-                if _chromosome_valid(child, obstacles, path_points):
-                    break
-                
-                deadlock_count += 1
+            # while not is_valid_chromosome(str(chromosome), obstacles, points):
+            #     chromosome = create_chromosome(points, path_validity)
             
-            path_lengths.append(_calculate_path_length(child, path_points))
-            new_population.append(child)
+            # population[i] = chromosome
 
-        move_obstacles(obstacles, path_points)
+            if parameters.move_obstacles:
+                parent1 = get_random_chromosome(fitness_list)
+                parent2 = get_random_chromosome(fitness_list)
+
+                child = crossover(parent1, parent2)
+
+                if randint(1, 10) <= parameters.mutation_prob * 10:
+                    child = mutation(child)
+                
+                path_lengths.append(get_path_length(child, parameters.points))
+                new_population.append(child)
+
+            else:
+                while True:
+                    parent1 = get_random_chromosome(fitness_list)
+                    parent2 = get_random_chromosome(fitness_list)
+
+                    child = crossover(parent1, parent2)
+
+                    if randint(1, 10) <= parameters.mutation_prob * 10:
+                        child = mutation(child)
+
+                    if is_valid_chromosome(child, parameters.obstacles, parameters.points):
+                        break
+                    
+                path_lengths.append(get_path_length(child, parameters.points))
+                new_population.append(child)
+
+        if parameters.num_obstacles > 0 and parameters.move_obstacles:
+            move_obstacles(parameters.obstacles)
+
         population = new_population 
-        plot(obstacles, path_points, new_population, path_lengths, (gen+2), last_gen=True if gen == generations-2 else False )
 
+        if generation == parameters.max_generations - 2:
+            plot(start, parameters.obstacles, parameters.points, new_population, path_lengths, generation + 2, True, optimal_solution_time)
+        else:
+            plot(start, parameters.obstacles, parameters.points, new_population, path_lengths, generation + 2, False, optimal_solution_time)
 
-def move_obstacles(obstacles, path_points):
-    index = randint(0, int(parser['Obstacles']['number_of_obstacles']) - 1)
+        for i in range(len(path_lengths)):
+            if is_valid_chromosome(population[i], parameters.obstacles, parameters.points) and shortest_path > path_lengths[i]:
+                new_shortest_path = path_lengths[i]
+                new_index = i
+
+        if new_shortest_path == shortest_path:
+            lock_count += 1
+        else:
+            lock_count = 0
+            shortest_path = new_shortest_path
+            optimal_solution_time = time.time() - start
+
+def move_obstacles(obstacles):
+    index = randint(0, parameters.num_obstacles - 1)
     direction = randint(0, 3)
-    factor = randint(1, 4)
+    factor = 0
 
-    # 0 for left, 1 for right, 2 for up and 3 for down
-    if direction == 0:
-        for i in range(4):
-            if obstacles[index][i][0] - factor > 1:
-                obstacles[index][i] = (obstacles[index][i][0] - factor, obstacles[index][i][1])  
-    
-    elif direction == 1:
-        for i in range(4):
-            if obstacles[index][i][0] + factor < int(parser['Plot Axes']['x_end']):
-                obstacles[index][i] = (obstacles[index][i][0] + factor, obstacles[index][i][1]) 
-    
-    elif direction == 2:
-        for i in range(4):
-            if obstacles[index][i][1] + factor < int(parser['Plot Axes']['y_end']):
-                obstacles[index][i] = (obstacles[index][i][0], obstacles[index][i][1] + factor) 
-    
-    elif direction == 3:
-        for i in range(4):
-            if obstacles[index][i][1] - factor > 1:
-                obstacles[index][i] = (obstacles[index][i][0], obstacles[index][i][1] - factor)
+    if parameters.x_end > 50:
+        factor = randint(0, 3)
+    else:
+        factor = randint(0, 1)
 
-def _mutation(chromosome):
-    index = randint(1, len(chromosome) - 2) # we won't mutate source and goal genes
+    # 0 para esquerda, 1 para a direita, 2 para cima e 3 para baixo
+    if factor > 0:
+        if direction == 0:
+            for i in range(4):
+                if obstacles[index][i][0] - factor > 1:
+                    obstacles[index][i] = (obstacles[index][i][0] - factor, obstacles[index][i][1])
+                else:
+                    break  
+        
+        elif direction == 1:
+            for i in range(4):
+                if obstacles[index][i][0] + factor < parameters.x_end:
+                    obstacles[index][i] = (obstacles[index][i][0] + factor, obstacles[index][i][1]) 
+                else:
+                    break
+        
+        elif direction == 2:
+            for i in range(4):
+                if obstacles[index][i][1] + factor < parameters.y_end:
+                    obstacles[index][i] = (obstacles[index][i][0], obstacles[index][i][1] + factor)
+                else:
+                    break 
+        
+        elif direction == 3:
+            for i in range(4):
+                if obstacles[index][i][1] - factor > 1:
+                    obstacles[index][i] = (obstacles[index][i][0], obstacles[index][i][1] - factor)
+                else:
+                    break
 
+def mutation(chromosome):
+    index = randint(1, len(chromosome) - 2)
     chromosome = list(chromosome)
-    chromosome[index] = '1' if  chromosome[index] == '0' else '0'
+
+    if chromosome[index] == '0':
+        chromosome[index] = '1'
+    else:
+        chromosome[index] = '0'
 
     return ''.join(chromosome)
 
-def _fitness(chromosome, path_points):
-    length = _calculate_path_length(chromosome, path_points)
-    fitness = 1 / length if length != 0 else 0
+def get_fitness(chromosome, obstacles, points):
+    if not is_valid_chromosome(chromosome, obstacles, points):
+        return 0
+    
+    length = get_path_length(chromosome, points)
+    
+    if length == 0:
+        return 0
+    else:
+        return 1 / length
 
-    return fitness
+def get_random_chromosome(fitness_list):
+    candidates_cut_index = len(fitness_list) * parameters.top_percentage
+    candidates_cut_index = math.floor(candidates_cut_index)
 
-def _sort_by_fitness(population, path_points):
-    fitness_list = []
+    return fitness_list[randint(0, candidates_cut_index)][0]
+
+def fitness_sort(population, obstacles, points):
+    sorted = []
 
     for chromosome in population:
-        chromosome_to_fitness = (chromosome, _fitness(chromosome, path_points))
-        fitness_list.append(chromosome_to_fitness)
+        sorted.append((chromosome, get_fitness(chromosome, obstacles, points)))
 
-    fitness_list.sort(reverse=True, key=lambda tuple: tuple[1])
+    sorted.sort(reverse=True, key=lambda tuple: tuple[1])
 
-    return fitness_list
+    return sorted
 
-def _choose_random_parent(fitness_list):
-    till_index = len(fitness_list) * float(parser['Genetic Algorithm']['top_percentage'])
-    till_index = math.floor(till_index)
+def crossover(parent1, parent2):
+    index = math.floor(parameters.cross_point * len(parent1))
 
-    parent_to_fitness = fitness_list[randint(0, till_index)]
+    return ''.join([parent1[:index], parent2[index:]])
 
-    return parent_to_fitness[0]
-
-def _crossover(parent1, parent2):
-
-    if parser['Genetic Algorithm'].getboolean('crossover_split_random'):
-        split_size = randint(0, len(parent1))
-
-    else:
-        fraction = float(parser['Genetic Algorithm']['crossover_split_size'])
-        split_size = math.floor(fraction * len(parent1))
-
-    return ''.join([parent1[:split_size], parent2[split_size:]])
-
-def _crossover2(parent1, parent2, path_points, obstacles):
+def _crossover2(parent1, parent2, points, obstacles):
     size_p1 = len(parent1)
     crossover_points = []
     match_points = []
@@ -132,61 +184,48 @@ def _crossover2(parent1, parent2, path_points, obstacles):
     for i in range(1, size_p1 - 2):
         for j in range(1, size_p1 - 2):
             if (parent1[i+1] == '1' and parent2[j] == '1') and (parent1[i] == '1' and parent2[j+1] == '1'):
-                if not path_overlaps_obstacle(path_points[i+1], path_points[j], obstacles) and not path_overlaps_obstacle(path_points[i], path_points[j+1], obstacles):
+                if not is_valid_path(points[i+1], points[j], obstacles) and not is_valid_path(points[i], points[j+1], obstacles):
                     crossover_points.append(i)
                     match_points.append(j)
 
     print(crossover_points, match_points)
-    # for index in crossover_points:
-    #     print(index)
-        # child2 = ''.join([parent2[:match_points[index]+1], parent1[index+1:]])
-        # child1 = ''.join([parent1[:index+1], parent2[match_points[index]+1:]])
-        # children.append(child1)
-        # children.append(child2)
-    
-    # children = _sort_by_fitness(children, path_points)
-    # print(children)
-    
     return parent1
 
-def _generate_population(path_points, obstacles, path_validity):
-
-    population_size = int(parser['Genetic Algorithm']['population_size'])
-
+def create_population(points, path_validity):
     population = []
-    print('Generating initial population, please wait ....')
-    for i in range(population_size):
+   
+    for _ in range(parameters.population_size):
+        # Gera uma população de caminhos válidos
         while True:
-            chromosome = _generate_chromosome(path_points, path_validity)
+            chromosome = create_chromosome(points, path_validity)
+
             if chromosome:
                 break
             
         population.append(chromosome)
 
-    print('Successfully created initial population')
-    print('Simulating genetic algorithm for path planning .... (Press Ctrl+C to stop)')
     return population
 
-def _generate_chromosome(path_points, path_validity):
-
-    chromosome = '1' # source is always visited
-    previous_path_point = path_points[0] # keep track of the previous path point that was 1
+def create_chromosome(points, path_validity):
+    # Sempre começamos visitando a origem
+    chromosome = '1'
+    previous_point = points[0]
     
-    for i in range(1, len(path_points)):
-        path_point = path_points[i]
+    for i in range(1, len(points)):
+        point = points[i]
 
-        if i == (len(path_points) - 1) and not path_validity[previous_path_point][i]:
+        if i == (len(points) - 1) and not path_validity[previous_point][i]:
             return False
 
-        if path_validity[previous_path_point][i]:
+        if path_validity[previous_point][i]:
 
-            if i == (len(path_points) - 1):
+            if i == (len(points) - 1):
                 gene = '1'
             else:
                 gene = '0' if randint(1, 10) > 5 else '1'
 
             if gene == '1':
-                previous_path_point = path_point
+                previous_point = point
             
             chromosome += gene
 
@@ -195,60 +234,63 @@ def _generate_chromosome(path_points, path_validity):
 
     return chromosome
 
-def _chromosome_valid(chromosome, obstacles, path_points):
-    path_point_1, path_point_2 = (), ()
+def is_valid_chromosome(chromosome, obstacles, points):
+    point1, point2 = (), ()
 
+    # Usamos o fato de que todos os cromossomos tem o mesmo tamanho
+    # Para ter uma referência do indíce de cada ponto em points
     for i, gene in enumerate(chromosome):
         if gene == '1':
 
-            if not path_point_1:
-                path_point_1 = path_points[i] 
+            if not point1:
+                point1 = points[i] 
             else:
-                path_point_2 = path_points[i]
+                point2 = points[i]
 
-            if path_point_1 and path_point_2:
+            if point1 and point2:
 
-                if path_overlaps_obstacle(path_point_1, path_point_2, obstacles):
+                if is_valid_path(point1, point2, obstacles):
                     return False
 
-                path_point_1 = path_point_2
-                path_point_2 = ()
+                point1 = point2
+                point2 = ()
     
     return True
 
-def path_overlaps_obstacle(path_point_1, path_point_2, obstacles):
-    path = LineString([path_point_1, path_point_2])
+def is_valid_path(point1, point2, obstacles):
+    path = LineString([point1, point2])
 
     for obstacle in obstacles:
-
         obstacle = Polygon(obstacle)
+
         if path.intersects(obstacle):
             return True
 
     return False
 
 
-def _calculate_path_length(chromosome, path_points):
-    path_point_1, path_point_2 = (), ()
+def get_path_length(chromosome, points):
+    point1, point2 = (), ()
     length = 0
 
     for i, gene in enumerate(chromosome):
         if gene == '1':
-            last_path_point = path_points[i]
-
-            if not path_point_1:
-                path_point_1 = path_points[i] 
+            if not point1:
+                point1 = points[i] 
             else:
-                path_point_2 = path_points[i]
+                point2 = points[i]
 
-            if path_point_1 and path_point_2:
+            if point1 and point2:
 
-                length += _distance(path_point_1, path_point_2)
+                length += get_distance(point1, point2)
 
-                path_point_1 = path_point_2
-                path_point_2 = ()
+                point1 = point2
+                point2 = ()
 
     return length
 
-def _distance(path_point_1, path_point_2):
-    return math.sqrt( (path_point_2[0] - path_point_1[0])**2 + (path_point_2[1] - path_point_1[1])**2 )
+def get_distance(point1, point2):
+    x_diff = point2[0] - point1[0]
+    y_diff = point2[1] - point1[1]
+
+    return math.sqrt((x_diff ** 2) + (y_diff ** 2))

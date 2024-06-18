@@ -1,70 +1,27 @@
-from config.parser import parser
-from utils.obstacle_generator import generate_obstacles
-from utils.path_point_generator import generate_path_points
-from genetic_algorithm import start, path_overlaps_obstacle
-# from GA_moves import start
-
-obstacles = []
-path_points = []
-path_validity = dict()
-grid = []
-n = int(parser['Plot Axes']['x_end'])
-
-## Build a grid with model according to project planning 
-
-# for i in range(n+1):
-#     aux = []
-#     for j in range(n+1):
-#         if i == n and j == n:
-#             aux.append('F')
-#         else:
-#             aux.append('O')
-#     grid.append(aux)
+from genetic_algorithm import start, is_valid_path
+import parameters
 
 def main():
-    _init_obstacles()
-    _init_path_points()
+    # Mantém o valor inicial da validade dos caminhos
+    # Será utilizado na hora de gerar a população inicial
+    # para que ela só tenha cromossomos válidos
 
-    _init_path_validity()
+    for i, initial_point in enumerate(parameters.points):
 
-    start(obstacles, path_points, path_validity)
-    
-def _init_path_points():
+        if initial_point not in path_validity:
+            path_validity[initial_point] = [True] * parameters.num_points
 
-    if parser['Path Points'].getboolean('generate_randomly'):
-        generate_path_points(path_points, obstacles)
+        for j, final_point in enumerate(parameters.points):
 
-    else:
-        # eval will create the list from the string representation of list in config.ini
-        for element in eval(parser['Hardcoded Path Points']['path_points']):
-            path_points.append(element)
+            if final_point not in path_validity:
+                path_validity[final_point] = [True] * parameters.num_points
 
-def _init_obstacles():
+            if is_valid_path(initial_point, final_point, parameters.obstacles):
+                path_validity[initial_point][j] = False
+                path_validity[final_point][i] = False
 
-    if parser['Obstacles'].getboolean('generate_randomly'):
-        number_of_obstacles = int(parser['Obstacles']['number_of_obstacles'])
-        generate_obstacles(obstacles, number_of_obstacles)
+    start(path_validity)
 
-    else:
-        for i in range(int(parser['Hardcoded Obstacles']['number_of_hardcoded_obstacles'])):
-            obstacle = eval(parser['Hardcoded Obstacles'][f"obstacle_{i+1}"])
-            obstacles.append(obstacle)
 
-def _init_path_validity():
-    
-    for i, path_point_start in enumerate(path_points):
-
-        if path_point_start not in path_validity:
-            path_validity[path_point_start] = [True] * len(path_points)
-
-        for j, path_point_end in enumerate(path_points):
-
-            if path_point_end not in path_validity:
-                path_validity[path_point_end] = [True] * len(path_points)
-
-            if path_overlaps_obstacle(path_point_start, path_point_end, obstacles):
-                path_validity[path_point_start][j] = False
-                path_validity[path_point_end][i] = False
-
-if __name__ == '__main__':
-    main()
+path_validity = {}
+main()
